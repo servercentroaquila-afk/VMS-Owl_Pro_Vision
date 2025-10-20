@@ -134,11 +134,11 @@ hls/
 *.m3u8
 *.ts
 
-# SDK files (binarios propietarios) - NO SUBIR A GITHUB
-backend/sdk/hikvision/*.dll
-backend/sdk/hikvision/*.so
-backend/sdk/dahua/*.dll
-backend/sdk/dahua/*.so
+# SDK files (binarios propietarios) - INCLUIR EN GITHUB
+# backend/sdk/hikvision/*.dll
+# backend/sdk/hikvision/*.so
+# backend/sdk/dahua/*.dll
+# backend/sdk/dahua/*.so
 
 # Backup files
 backup_*.sql
