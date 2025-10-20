@@ -1,0 +1,289 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: vms-aquila
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vms-config
+  namespace: vms-aquila
+data:
+  DATABASE_URL: "postgresql://postgres:vms_password_2024@postgres-service:5432/vmsdb"
+  HIK_SDK_PATH: "/app/sdk/hikvision/HCNetSDK.dll"
+  DAHUA_SDK_PATH: "/app/sdk/dahua/dhnetsdk.dll"
+  HLS_ROOT: "/var/www/hls"
+  SECRET_KEY: "your-secret-key-change-in-production-2024"
+  FFMPEG_PATH: "ffmpeg"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: vms-secrets
+  namespace: vms-aquila
+type: Opaque
+data:
+  postgres-password: dm1zX3Bhc3N3b3JkXzIwMjQ=  # base64 encoded
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  namespace: vms-aquila
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+      - name: postgres
+        image: postgres:15-alpine
+        ports:
+        - containerPort: 5432
+        env:
+        - name: POSTGRES_USER
+          value: "postgres"
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: vms-secrets
+              key: postgres-password
+        - name: POSTGRES_DB
+          value: "vmsdb"
+        volumeMounts:
+        - name: postgres-storage
+          mountPath: /var/lib/postgresql/data
+      volumes:
+      - name: postgres-storage
+        persistentVolumeClaim:
+          claimName: postgres-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-service
+  namespace: vms-aquila
+spec:
+  selector:
+    app: postgres
+  ports:
+  - port: 5432
+    targetPort: 5432
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-pvc
+  namespace: vms-aquila
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  namespace: vms-aquila
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: backend
+  template:
+    metadata:
+      labels:
+        app: backend
+    spec:
+      containers:
+      - name: backend
+        image: vms-aquila-backend:latest
+        ports:
+        - containerPort: 8000
+        envFrom:
+        - configMapRef:
+            name: vms-config
+        volumeMounts:
+        - name: sdk-storage
+          mountPath: /app/sdk
+        - name: hls-storage
+          mountPath: /var/www/hls
+        livenessProbe:
+          httpGet:
+            path: /api/health
+            port: 8000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /api/health
+            port: 8000
+          initialDelaySeconds: 5
+          periodSeconds: 5
+      volumes:
+      - name: sdk-storage
+        persistentVolumeClaim:
+          claimName: sdk-pvc
+      - name: hls-storage
+        persistentVolumeClaim:
+          claimName: hls-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend-service
+  namespace: vms-aquila
+spec:
+  selector:
+    app: backend
+  ports:
+  - port: 8000
+    targetPort: 8000
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend
+  namespace: vms-aquila
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: frontend
+  template:
+    metadata:
+      labels:
+        app: frontend
+    spec:
+      containers:
+      - name: frontend
+        image: vms-aquila-frontend:latest
+        ports:
+        - containerPort: 3000
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 3000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend-service
+  namespace: vms-aquila
+spec:
+  selector:
+    app: frontend
+  ports:
+  - port: 3000
+    targetPort: 3000
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: streamer
+  namespace: vms-aquila
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: streamer
+  template:
+    metadata:
+      labels:
+        app: streamer
+    spec:
+      containers:
+      - name: streamer
+        image: vms-aquila-streamer:latest
+        ports:
+        - containerPort: 1935
+        volumeMounts:
+        - name: hls-storage
+          mountPath: /var/www/hls
+      volumes:
+      - name: hls-storage
+        persistentVolumeClaim:
+          claimName: hls-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: streamer-service
+  namespace: vms-aquila
+spec:
+  selector:
+    app: streamer
+  ports:
+  - port: 1935
+    targetPort: 1935
+  type: ClusterIP
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: sdk-pvc
+  namespace: vms-aquila
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: hls-pvc
+  namespace: vms-aquila
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 50Gi
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: vms-ingress
+  namespace: vms-aquila
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
+spec:
+  rules:
+  - host: vms.local
+    http:
+      paths:
+      - path: /api
+        pathType: Prefix
+        backend:
+          service:
+            name: backend-service
+            port:
+              number: 8000
+      - path: /hls
+        pathType: Prefix
+        backend:
+          service:
+            name: backend-service
+            port:
+              number: 8000
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: frontend-service
+            port:
+              number: 3000
